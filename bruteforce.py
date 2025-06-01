@@ -1,76 +1,74 @@
-######################################################
-# This script will only bruteforce 4 or 6 digit PINs #
-# Can be modified to include longer PINs             #
-######################################################
 import argparse
 import logging
 import hashlib
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
 import binascii
+import multiprocessing
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='[%(levelname)s] %(asctime)s %(message)s',
     datefmt='%d-%m-%Y %H:%M:%S',
 )
 
+MAGIC_HEADER = "ffd8ff"  # JPEG magic header
 
-def four_digit_pin(input):
-    logging.info("Beginning 4 digit PIN bruteforce")
-    four_digit = [f"{i:04}" for i in range(10000)]
-    for pin in four_digit:
-        key = hashlib.sha1(pin.encode()).digest()[:16]
-        iv = key
-        counter = Counter.new(128, initial_value=int.from_bytes(iv, "big"))
-        cipher = AES.new(key, AES.MODE_CTR, counter=counter)
-        with open(input, "rb") as enc_data:
-            dec_data = cipher.decrypt(enc_data.read(16))
-            header = binascii.hexlify(dec_data).decode("utf8")
-            if header.startswith("ffd8ff"):
-                logging.info(f"PIN found: {pin}")
-                return pin
-            else:
-                continue
+def generate_pins(start, end, length):
+    return [f"{i:0{length}}" for i in range(start, end)]
 
+def decrypt_and_check(pin, data):
+    key = hashlib.sha1(pin.encode()).digest()[:16]
+    iv = key
+    counter = Counter.new(128, initial_value=int.from_bytes(iv, "big"))
+    cipher = AES.new(key, AES.MODE_CTR, counter=counter)
+    dec_data = cipher.decrypt(data)
+    header = binascii.hexlify(dec_data).decode("utf8")
+    if header.startswith(MAGIC_HEADER):
+        return pin
+    return None
 
-def six_digit_pin(input):
-    logging.info("Beginning 6 digit PIN bruteforce")
-    four_digit = [f"{i:06}" for i in range(1000000)]
-    for pin in four_digit:
-        key = hashlib.sha1(pin.encode()).digest()[:16]
-        iv = key
-        counter = Counter.new(128, initial_value=int.from_bytes(iv, "big"))
-        cipher = AES.new(key, AES.MODE_CTR, counter=counter)
-        with open(input, "rb") as enc_data:
-            dec_data = cipher.decrypt(enc_data.read(16))
-            header = binascii.hexlify(dec_data).decode("utf8")
-            if header.startswith("ffd8ff"):
-                logging.info(f"PIN found: {pin}")
-                return pin
-            else:
-                continue
+def worker(pin_range, data, length):
+    for pin in generate_pins(*pin_range, length):
+        result = decrypt_and_check(pin, data)
+        if result:
+            return result
+    return None
 
-
-def bruteforce(input):
-    if not input.endswith(".6zu"):
+def bruteforce(input_path, max_digits=10):
+    if not input_path.endswith(".6zu"):
         logging.warning("Script requires a .6zu file")
         raise SystemExit(1)
-    if four_digit_pin(input):
-        raise SystemExit(1)
-    if six_digit_pin(input):
-        raise SystemExit(1)
 
-    logging.info("Could not find PIN, could possibly not be a 4 or 6 digits")
+    with open(input_path, "rb") as f:
+        enc_data = f.read(16)
 
+    cpu_count = multiprocessing.cpu_count()
+    logging.info(f"Using {cpu_count} cores")
+
+    for length in range(4, max_digits + 1):
+        max_val = 10 ** length
+        chunk_size = max_val // cpu_count
+        logging.info(f"Trying {length}-digit PINs...")
+
+        with multiprocessing.Pool(cpu_count) as pool:
+            tasks = [((i, min(i + chunk_size, max_val)), enc_data, length) for i in range(0, max_val, chunk_size)]
+            results = pool.starmap(worker, tasks)
+            for pin in results:
+                if pin:
+                    logging.info(f"PIN found: {pin}")
+                    return pin
+
+    logging.info("Could not find PIN, possibly not 4–10 digits or not AES-encrypted JPEG")
+    return None
 
 def main():
-    parser = argparse.ArgumentParser("LockMyPix Bruteforce")
-    parser.add_argument("input",
-                        help="Path to .6zu file")
+    parser = argparse.ArgumentParser("LockMyPix BruteForcer")
+    parser.add_argument("input", help="Path to .6zu file")
+    parser.add_argument("--max", type=int, default=10, help="Maximum PIN digit length to test (default: 10)")
     args = parser.parse_args()
-    bruteforce(args.input)
 
+    bruteforce(args.input, args.max)
 
 if __name__ == "__main__":
     main()
