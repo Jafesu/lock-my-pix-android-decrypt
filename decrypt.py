@@ -1,15 +1,15 @@
+import argparse
 import hashlib
+import logging
+import os
+import binascii
+from pathlib import Path
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
-import argparse
-import os
-from pathlib import Path
-import logging
-import binascii
 
-
+# Logging Setup
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='[%(levelname)s] %(asctime)s %(message)s',
     datefmt='%d-%m-%Y %H:%M:%S',
     handlers=[
@@ -18,139 +18,126 @@ logging.basicConfig(
     ]
 )
 
-
-# this is likely not a full list of the extensions possible
-extension_map = {
-    ".vp3": ".mp4",
-    ".vo1": ".webm",
-    ".v27": ".mpg",
-    ".vb9": ".avi",
-    ".v77": ".mov",
-    ".v78": ".wmv",
-    ".v82": ".dv",
-    ".vz9": ".divx",
-    ".vi3": ".ogv",
-    ".v1u": ".h261",
-    ".v6m": ".h264",
-    ".6zu": ".jpg",
-    ".tr7": ".gif",
-    ".p5o": ".png",
-    ".8ur": ".bmp",
-    ".33t": ".tiff",  # this extension could also be .tif
-    ".20i": ".webp",
-    ".v93": ".heic",
-    ".v91": ".flv",  # this key is linked to .flv and .eps
-    ".v80": ".3gpp",
-    ".vo4": ".ts",
-    ".v99": ".mkv",
-    ".vr2": ".mpeg",
-    ".vv3": ".dpg",
-    ".v81": ".rmvb",
-    ".vz8": ".vob",
-    ".wi2": ".asf",
-    ".vi4": ".h263",
-    ".v2u": ".f4v",
-    ".v76": ".m4v",
-    ".v75": ".ram",
-    ".v74": ".rm",
-    ".v3u": ".mts",
-    ".v92": ".dng",
-    ".r89": ".ps",
-    ".v79": ".3gp",
+# Encrypted -> Real Extension Map
+EXTENSION_MAP = {
+    ".vp3": ".mp4", ".vo1": ".webm", ".v27": ".mpg", ".vb9": ".avi",
+    ".v77": ".mov", ".v78": ".wmv", ".v82": ".dv", ".vz9": ".divx",
+    ".vi3": ".ogv", ".v1u": ".h261", ".v6m": ".h264", ".6zu": ".jpg",
+    ".tr7": ".gif", ".p5o": ".png", ".8ur": ".bmp", ".33t": ".tiff",
+    ".20i": ".webp", ".v93": ".heic", ".v91": ".flv", ".v80": ".3gpp",
+    ".vo4": ".ts", ".v99": ".mkv", ".vr2": ".mpeg", ".vv3": ".dpg",
+    ".v81": ".rmvb", ".vz8": ".vob", ".wi2": ".asf", ".vi4": ".h263",
+    ".v2u": ".f4v", ".v76": ".m4v", ".v75": ".ram", ".v74": ".rm",
+    ".v3u": ".mts", ".v92": ".dng", ".r89": ".ps", ".v79": ".3gp",
 }
 
+# Known file signature magic bytes (hex)
+FILE_SIGNATURES = {
+    ".jpg": "ffd8ff",
+    ".png": "89504e47",
+    ".gif": "47494638",
+    ".bmp": "424d",
+    ".tiff": "4949",     # Intel byte order TIFF
+    ".webp": "52494646", # RIFF
+    ".mp4": "00000018",
+    ".webm": "1a45dfa3",
+    ".avi": "52494646",
+    ".mov": "00000014",
+    ".mpg": "000001ba",
+    ".wmv": "3026b275",
+    ".mkv": "1a45dfa3",
+    ".flv": "464c56",
+    ".3gp": "00000018",
+    ".ts": "4740",
+}
 
-def test_password(input_dir, password):
+def create_cipher(password):
+    key = hashlib.sha1(password.encode()).digest()[:16]
+    counter = Counter.new(128, initial_value=int.from_bytes(key, "big"))
+    return AES.new(key, AES.MODE_CTR, counter=counter)
+
+def test_password(input_dir, password, force=False):
+    key = hashlib.sha1(password.encode()).digest()[:16]
+    iv = key
+    cipher = AES.new(key, AES.MODE_CTR, counter=Counter.new(128, initial_value=int.from_bytes(iv, "big")))
+
+    found_test_file = False
+
     for file in os.listdir(input_dir):
-        if file.endswith(".6zu"):
-            key = hashlib.sha1(password.encode()).digest()[:16]
-            iv = key
-            counter = Counter.new(128, initial_value=int.from_bytes(iv, "big"))
-            cipher = AES.new(key, AES.MODE_CTR, counter=counter)
-            encrypted_path = os.path.join(input_dir, os.fsdecode(file))
-            with open(encrypted_path, "rb+") as enc_data:
-                dec_data = cipher.decrypt(enc_data.read(16))
-                header = binascii.hexlify(dec_data).decode("utf8")
-                if header.startswith("ffd8ff"):
+        path = os.path.join(input_dir, file)
+        if not Path(path).is_file():
+            continue
+
+        ext = os.path.splitext(file)[1]
+        real_ext = EXTENSION_MAP.get(ext)
+        if real_ext and real_ext in FILE_SIGNATURES:
+            found_test_file = True
+            with open(path, "rb") as f:
+                dec_data = cipher.decrypt(f.read(16))
+                header = binascii.hexlify(dec_data).decode("utf8").lower()
+                expected = FILE_SIGNATURES[real_ext].lower()
+                if header.startswith(expected):
+                    logging.info(f"Password is valid based on {file}")
                     return True
                 else:
-                    logging.warning(f"{password} appears to be incorrect")
-                    return False
-        else:
-            logging.warning("Cannot find a jpg file to test password")
-            print("Password cannot be tested, do you want to continue anyway?")
-            progress = ""
-            while progress != "y" and progress != "n":
-                progress = input("y/n: ").lower()
-            if progress == "y":
-                logging.info("Password check failed, user continued script")
-                return True
-            else:
-                logging.warning("Password check failed, user stopped script")
-                return False
+                    logging.warning(f"Header mismatch in {file}: expected {expected}, got {header}")
 
+    if not found_test_file:
+        logging.warning("No known file types found to test password.")
 
-def write_to_output(output_dir, filename, dec_data):
-    basename, ext = os.path.splitext(filename)
-    if extension_map.get(ext):
-        filename += extension_map.get(ext)
-    else:
-        filename += ".unknown"
-        logging.warning(f"File {filename} has an unknown extension")
+    if force:
+        logging.warning("Forcing decryption despite failed header check.")
+        return True
 
-    if not Path(output_dir).exists():
-        logging.info(f"Creating output directory: {output_dir}")
-        os.mkdir(output_dir)
+    logging.error("Password validation failed. Use --force to bypass.")
+    return False
 
-    with open(os.path.join(output_dir, filename), "wb") as f:
-        f.write(dec_data)
-        logging.info(f"Decrypted file {filename} written to {output_dir}")
+def write_decrypted(output_dir, filename, data):
+    orig_ext = os.path.splitext(filename)[1]
+    new_ext = EXTENSION_MAP.get(orig_ext, ".unknown")
 
+    if new_ext == ".unknown":
+        logging.warning(f"Unknown extension for {filename}, defaulting to .unknown")
 
-def decrypt_image(password, input_dir, output_dir):
-    logging.info("Decryption started")
-    logging.info(f"Password: {password}")
-    logging.info(f"Input directory: {input_dir}")
-    logging.info(f"Output directory: {output_dir}")
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    key = hashlib.sha1(password.encode()).digest()[:16]
-    iv = key  # IV is the same as the key
-    logging.info(f"AES key: {key}")
-    logging.info(f"AES IV: {iv}")
+    output_file = output_path / (filename + new_ext)
+    with open(output_file, "wb") as f:
+        f.write(data)
+        logging.info(f"Decrypted: {output_file}")
 
+def decrypt_files(password, input_dir, output_dir):
     if not Path(input_dir).exists():
-        logging.warning(f"Input directory not found: {input_dir}")
+        logging.error(f"Input directory does not exist: {input_dir}")
         raise SystemExit(1)
 
     for file in os.listdir(input_dir):
-        encrypted_file = os.fsdecode(file)
-        encrypted_path = os.path.join(input_dir, encrypted_file)
+        encrypted_path = os.path.join(input_dir, file)
+        if not Path(encrypted_path).is_file():
+            continue
 
-        # Create a new cipher object for each file
-        counter = Counter.new(128, initial_value=int.from_bytes(iv, "big"))
-        cipher = AES.new(key, AES.MODE_CTR, counter=counter)
-
-        logging.info(f"Processing file: {encrypted_file}")
-        with open(encrypted_path, "rb") as enc_data:
-            dec_data = cipher.decrypt(enc_data.read())
-            write_to_output(output_dir, encrypted_file, dec_data)
-
+        logging.info(f"Decrypting: {file}")
+        cipher = create_cipher(password)
+        with open(encrypted_path, "rb") as f:
+            dec_data = cipher.decrypt(f.read())
+            write_decrypted(output_dir, file, dec_data)
 
 def main():
-    parser = argparse.ArgumentParser("LockMyPix Decrypt")
-    parser.add_argument("password",
-                        help="Enter the password for the application")
-
-    parser.add_argument("input",
-                        help="The directory of the exported encrypted files")
-
-    parser.add_argument("output",
-                        help="The directory for the decrypted files")
+    parser = argparse.ArgumentParser(description="LockMyPix Decryption Tool")
+    parser.add_argument("password", help="Password used for decryption")
+    parser.add_argument("input", help="Directory containing encrypted files")
+    parser.add_argument("output", help="Directory to write decrypted files")
+    parser.add_argument("--force", action="store_true", help="Force decryption even if password check fails")
 
     args = parser.parse_args()
-    decrypt_image(args.password, args.input, args.output)
-    logging.info("Decryption Completed")
 
+    if not test_password(args.input, args.password, args.force):
+        logging.error("Aborting due to failed password check.")
+        return
+
+    decrypt_files(args.password, args.input, args.output)
+    logging.info("Decryption complete.")
 
 if __name__ == "__main__":
     main()
