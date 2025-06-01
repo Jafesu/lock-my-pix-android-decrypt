@@ -1,33 +1,64 @@
 # lock-my-pix-android-decrypt
 
-Rough python script that should get the job done in terms of decrypting the files
-Also contains a bruteforcing python script that can bruteforce the 4 or 6 digit PINs from a single .6zu file
+Python tools for decrypting files exported from the LockMyPix Android app.
+Includes a decryption script for known passwords and a PIN brute-force tool for recovering 4–10 digit PINs.
 
-## Decryption Script
+---
 
-```bash
-usage: LockMyPix Decrypt [-h] password input output
+## 🔐 Decryption Script
 
-positional arguments:
-  password    Enter the password for the application
-  input       The directory of the exported encrypted files
-  output      The directory for the decrypted files
+Decrypts LockMyPix-encrypted files using a known password.
+Supports validation via file magic headers (e.g., `.jpg`, `.png`) and optional `--force` override.
 
-options:
-  -h, --help  show this help message and exit
-```
-
-## PIN Bruteforce
+### ✅ Usage
 
 ```bash
-usage: LockMyPix Bruteforce [-h] input
-
-positional arguments:
-  input       Path to .6zu file
-
-options:
-  -h, --help  show this help message and exit
-  --max   set max length for pin code
+python lockmypix_decrypt.py password input_dir output_dir [--force]
 ```
 
+### 📄 Arguments
 
+| Name         | Description                                               |
+| ------------ | --------------------------------------------------------- |
+| `password`   | The password or PIN used to encrypt the files             |
+| `input_dir`  | Path to directory containing encrypted files              |
+| `output_dir` | Path to directory where decrypted files will be saved     |
+| `--force`    | (Optional) Skip password validation using file signatures |
+
+---
+
+## 🔓 PIN Brute-Force Script
+
+Attempts to brute-force the PIN used to encrypt a `.6zu` file (usually a `.jpg`).
+Supports 4 to 10 digit numeric PINs and parallel processing for faster results.
+
+### ✅ Usage
+
+```bash
+python lockmypix_bruteforce.py input_file.6zu [--max 6]
+```
+
+### 📄 Arguments
+
+| Name    | Description                             |
+| ------- | --------------------------------------- |
+| `input` | Path to the `.6zu` encrypted image file |
+| `--max` | (Optional) Max PIN length (default: 10) |
+
+---
+
+## 📦 Requirements
+
+Install dependencies with:
+
+```bash
+pip install -r requirements.txt
+```
+
+**Contents of `requirements.txt`:**
+
+```
+pycryptodome
+```
+
+---
